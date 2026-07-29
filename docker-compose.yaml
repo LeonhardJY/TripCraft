@@ -1,0 +1,63 @@
+services:
+  # Redis 缓存（可选）
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  # Qdrant 向量数据库（替代 ChromaDB）
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  # Ollama 本地大模型服务
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  # 后端 FastAPI
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      - REDIS_ENABLED=true
+      - REDIS_URL=redis://redis:6379/0
+      - LLM_BASE_URL=http://ollama:11434/v1
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - backend_db:/app/db
+    depends_on:
+      - redis
+      - qdrant
+      - ollama
+    restart: unless-stopped
+
+  # 前端 Vue + Nginx
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  qdrant_data:
+  ollama_data:
+  backend_db:
