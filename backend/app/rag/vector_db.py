@@ -341,12 +341,13 @@ def _search_by_qdrant(
         qfilter = Filter(must=[FieldCondition(key="destination", match=MatchValue(value=destination))])
 
     try:
-        results = client.search(
+        from qdrant_client.models import QueryRequest
+        results = client.query_points(
             collection_name=QDRANT_COLLECTION_NAME,
-            query_vector=query_vec,
+            query=query_vec,
             limit=top_k,
             query_filter=qfilter,
-        )
+        ).points
     except Exception as exc:
         print(f"[qdrant] search failed: {exc}")
         return [], empty_usage

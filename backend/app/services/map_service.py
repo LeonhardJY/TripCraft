@@ -349,7 +349,7 @@ def estimate_route(
 
 def _pick_best_place(keyword: str, city: str | None = None) -> dict[str, Any] | None:
     """优先选择名称匹配且带照片的 POI，避免首条结果没有图片。"""
-    results = search_places(keyword=keyword, city=city, page_size=5)
+    results = search_places(keyword=keyword, city=city, page_size=10)
     if not results:
         return None
 
@@ -369,6 +369,18 @@ def _pick_best_place(keyword: str, city: str | None = None) -> dict[str, Any] | 
     return results[0]
 
 
+def _search_strict(keyword: str, city: str | None = None) -> dict[str, Any] | None:
+    """更严格的 POI 搜索：去除营销后缀词后重试。"""
+    stripped = keyword
+    for suffix in ["网红打卡地", "网红", "打卡地", "打卡位", "景区", "入口"]:
+        stripped = stripped.replace(suffix, "").strip()
+    if stripped and stripped != keyword:
+        result = _pick_best_place(stripped, city=city)
+        if result:
+            return result
+    return None
+
+
 def _enrich_spot(spot: SpotItem, city: str | None = None) -> bool:
     """补全单个景点的地址、经纬度和 POI 信息。"""
     place = _pick_best_place(spot.name, city=city)
@@ -376,10 +388,24 @@ def _enrich_spot(spot: SpotItem, city: str | None = None) -> bool:
         place = _pick_best_place(spot.location, city=city)
 
     if place is None:
+        place = _search_strict(spot.name, city=city)
+
+    if place is None:
         query_address = spot.address or spot.location or spot.name
         geocode = geocode_address(query_address, city=city)
         if geocode is None:
-            return False
+            # 最终兜底：城市级搜索景点核心名称
+            core = spot.name.replace("·", "").replace("-", "").strip()
+            if core and core != spot.name:
+                place = _pick_best_place(core, city=city)
+            if place is None:
+                return False
+            spot.address = place.get("address") or spot.address
+            spot.latitude = place.get("latitude")
+            spot.longitude = place.get("longitude")
+            spot.image_url = place.get("image_url") or spot.image_url
+            spot.poi_id = place.get("poi_id") or spot.poi_id
+            return True
         spot.address = geocode.get("formatted_address") or spot.address
         spot.latitude = geocode.get("latitude")
         spot.longitude = geocode.get("longitude")

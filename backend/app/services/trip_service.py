@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import date as DateType, timedelta
 
 from app.agents.trip_planner_agent import (
@@ -23,7 +24,10 @@ from app.models.schemas import (
     TripEditRequest,
     TripRequest,
 )
-from app.services.map_service import enrich_itinerary_with_map_data
+from app.services.map_service import (
+    enrich_itinerary_with_map_data,
+    estimate_route,
+)
 from app.services.fallback_candidates import extract_fallback_candidates
 from app.services.place_candidate_service import (
     CityCandidatePool,
@@ -44,6 +48,8 @@ TECHNICAL_TIP_KEYWORDS = (
     "源码",
     "trip_service",
 )
+
+_ACCOMMODATION_KEYWORDS = ("酒店", "民宿", "客栈", "宾馆", "旅馆", "旅店", "别墅", "度假")
 
 
 def _clean_user_tips(tips: list[str], destination: str | None = None) -> list[str]:
@@ -67,6 +73,13 @@ def _clean_user_tips(tips: list[str], destination: str | None = None) -> list[st
         "古镇、生态廊道和石板路更适合慢慢走，鞋子尽量选择舒适防滑的款式。",
         "热门景点建议错峰出发，给拍照、用餐和交通预留更从容的缓冲时间。",
     ]
+
+
+def _is_accommodation(name: str | None) -> bool:
+    """检查名称是否像住宿类（酒店/民宿/客栈等），避免 LLM 把住宿当景点用。"""
+    if not name:
+        return False
+    return any(kw in name for kw in _ACCOMMODATION_KEYWORDS)
 
 
 def _requests_no_fixed_spot(instruction: str) -> bool:
@@ -160,6 +173,83 @@ def _build_transport_weights(day_count: int, pace: str | None) -> list[float]:
     ]
 
 
+def _haversine_km(
+    lat1: float, lon1: float, lat2: float, lon2: float
+) -> float:
+    """计算两点之间的球面距离（公里）。"""
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _optimize_daily_routes(itinerary: Itinerary) -> Itinerary:
+    """根据景点坐标更新每段交通的预计距离和耗时。"""
+    for day in itinerary.days:
+        # 只处理有坐标的情况
+        points: list[tuple[str, float | None, float | None]] = []
+        if day.hotel and day.hotel.latitude and day.hotel.longitude:
+            points.append(("hotel", day.hotel.latitude, day.hotel.longitude))
+        for spot in day.spots:
+            if spot.latitude and spot.longitude:
+                points.append((f"spot:{spot.name}", spot.latitude, spot.longitude))
+        for meal in day.meals:
+            if meal.latitude and meal.longitude:
+                points.append((f"meal:{meal.name}", meal.latitude, meal.longitude))
+
+        if len(points) < 2:
+            continue
+
+        # 更新每段交通信息
+        for i in range(len(points) - 1):
+            _, lat1, lon1 = points[i]
+            _, lat2, lon2 = points[i + 1]
+            if None in (lat1, lon1, lat2, lon2):
+                continue
+
+            km = _haversine_km(lat1, lon1, lat2, lon2)
+            estimate_minutes = int(km / 0.5) if km > 0 else 10  # 按步行+打车综合速度 0.5km/min
+
+            # 尝试高德 API 获取真实驾车距离
+            try:
+                route = estimate_route(lon1, lat1, lon2, lat2)
+                if route and route.get("distance_km"):
+                    real_km: float | None = route.get("distance_km")
+                    if real_km is not None:
+                        km = real_km
+                    real_min: int | None = route.get("estimated_minutes")
+                    if real_min is not None:
+                        estimate_minutes = real_min
+            except Exception:
+                pass
+
+            transport = TransportItem(
+                mode=(
+                    "步行"
+                    if km < 1.5
+                    else "骑行" if km < 4 else "打车"
+                ),
+                distance_km=round(km, 2),
+                estimated_minutes=estimate_minutes,
+                duration=f"{estimate_minutes} 分钟",
+            )
+            if i < len(day.transport):
+                day.transport[i].distance_km = transport.distance_km
+                day.transport[i].estimated_minutes = transport.estimated_minutes
+                day.transport[i].duration = transport.duration
+                day.transport[i].mode = transport.mode
+            else:
+                day.transport.append(transport)
+
+    return itinerary
+
+
 def _apply_route_based_transport_costs(itinerary: Itinerary) -> None:
     """在已有路线距离时，用路线信息修正交通花费和耗时。"""
     for day in itinerary.days:
@@ -228,12 +318,17 @@ def _maybe_enrich_itinerary_with_map_data(
     city: str | None = None,
     request_budget: float | None = None,
 ) -> Itinerary:
-    """按开关补充地图信息，并在最后统一刷新预算。"""
+    """按开关补充地图信息，做距离优化，并在最后统一刷新预算。"""
     if ENABLE_AMAP_ENRICHMENT:
         try:
             itinerary = enrich_itinerary_with_map_data(itinerary, city=city)
         except Exception:
             pass
+
+    try:
+        itinerary = _optimize_daily_routes(itinerary)
+    except Exception:
+        pass
 
     return _refresh_budget_breakdown(itinerary, request_budget=request_budget)
 
@@ -569,6 +664,15 @@ def generate_trip_itinerary(request: TripRequest) -> Itinerary:
             if llm_day is not None
             else fallback_spot_names[index] if index < len(fallback_spot_names) else None
         )
+        # 校验：如果 LLM 把住宿当景点用，回退到 fallback
+        if spot_name and llm_day is not None and _is_accommodation(spot_name):
+            fallback_name = fallback_spot_names[index] if index < len(fallback_spot_names) else None
+            if fallback_name:
+                spot_name = fallback_name
+            else:
+                # 用剩余 fallback 中索引环绕填充
+                if fallback_spot_names:
+                    spot_name = fallback_spot_names[index % len(fallback_spot_names)]
         theme = llm_day.theme if llm_day is not None else f"{request.destination} 第 {day_number} 天轻松游"
         spot_description = (
             llm_day.spot_description
@@ -580,6 +684,11 @@ def generate_trip_itinerary(request: TripRequest) -> Itinerary:
             if llm_day is not None
             else fallback_meal_names[index] if index < len(fallback_meal_names) else None
         )
+        # 校验：LLM 把住宿名当餐饮用时回退
+        if meal_name and llm_day is not None and _is_accommodation(meal_name):
+            fallback_meal = fallback_meal_names[index] if index < len(fallback_meal_names) else None
+            if fallback_meal:
+                meal_name = fallback_meal
         meal_note = (
             llm_day.meal_notes
             if llm_day is not None

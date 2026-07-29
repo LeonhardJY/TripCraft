@@ -211,17 +211,7 @@ def build_destination_query(
     pace: str | None = None,
     special_notes: str | None = None,
 ) -> tuple[str, dict[str, int]]:
-    """把目的地、偏好、节奏和备注改写成更贴近检索场景的 query。返回 (query, token_usage)。"""
-    llm_query, token_usage = llm_rewrite_query(
-        destination=destination,
-        preferences=preferences,
-        pace=pace,
-        special_notes=special_notes,
-    )
-    if llm_query:
-        return llm_query, token_usage
-
-    logger.info("build_destination_query: LLM rewrite unavailable, using rule-based")
+    """把目的地、偏好、节奏和备注改写成检索 query。跳过 LLM rewrite，直接走规则。"""
     return _rule_based_query(
         destination=destination,
         preferences=preferences,

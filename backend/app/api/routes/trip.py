@@ -31,6 +31,7 @@ from app.services.trip_service import (
     generate_dynamic_trip_itinerary,
     generate_trip_itinerary,
 )
+from app.agents.graph.graph import run_trip_graph
 
 
 router = APIRouter(prefix="/trip", tags=["trip"])
@@ -158,6 +159,46 @@ def generate_trip(request: TripRequest) -> Itinerary:
         update={"destination": city_resolution.city},
     )
     return generate_trip_itinerary(normalized_request)
+
+
+@router.post("/generate-graph", response_model=Itinerary)
+def generate_trip_graph(request: TripRequest) -> Itinerary:
+    """基于 LangGraph Multi-Agent 的行程生成。"""
+    result = run_trip_graph({
+        "destination": request.destination,
+        "start_date": request.start_date.isoformat() if hasattr(request.start_date, 'isoformat') else str(request.start_date),
+        "end_date": request.end_date.isoformat() if hasattr(request.end_date, 'isoformat') else str(request.end_date),
+        "travelers": request.travelers,
+        "budget": request.budget,
+        "preferences": request.preferences,
+        "pace": request.pace,
+        "hotel_level": request.hotel_level,
+        "dietary_preferences": request.dietary_preferences,
+        "special_notes": request.special_notes,
+    })
+
+    errors = result.get("planner_errors", [])
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "generation_failed", "message": "; ".join(errors)},
+        )
+
+    # Router 判定为 unsupported
+    resolver_msg = result.get("resolution_message")
+    if resolver_msg:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "unsupported_destination", "message": resolver_msg},
+        )
+
+    itinerary = result.get("enriched_itinerary")
+    if not itinerary:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "empty_result", "message": "行程生成为空"},
+        )
+    return Itinerary(**itinerary)
 
 
 @router.get("/stats", response_model=TokenStatsResponse)
