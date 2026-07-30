@@ -1,15 +1,4 @@
-"""Multi-Agent StateGraph。
-
-Agent 分工：
-  Router  → 目的地解析与路径分派
-  Planner → RAG 检索 + LLM 行程生成
-  Reviewer → 质量检查 + 天气补充 + 过滤技术提示
-
-流程：
-  START → Router ──→ Planner ──→ Reviewer ──→ END
-                       ↑            │ (重试)
-                       └──────────────┘
-"""
+"""Multi-Agent StateGraph — Agent 间通过 messages 双向通信。"""
 
 from __future__ import annotations
 
@@ -35,21 +24,16 @@ def _build_graph() -> StateGraph:
 
     workflow.set_entry_point("router")
 
-    # Router → Planner 或 END
     workflow.add_conditional_edges(
         "router",
         router_should_continue,
         {"planner": "planner", "end": END},
     )
-
-    # Planner → Reviewer 或 END（出错）
     workflow.add_conditional_edges(
         "planner",
         planner_should_retry,
         {"reviewer": "reviewer", "end": END},
     )
-
-    # Reviewer → END（通过）/ Planner（重试）/ END（超限）
     workflow.add_conditional_edges(
         "reviewer",
         reviewer_should_retry,
@@ -70,7 +54,7 @@ def get_graph():
 
 
 def run_trip_graph(user_input: dict) -> dict[str, Any]:
-    """外部入口：输入用户请求 → 输出最终行程。"""
+    """入口：用户请求 → Multi-Agent 协作 → 最终行程 + 通信日志。"""
     graph = get_graph()
 
     initial: TripState = {
@@ -94,26 +78,51 @@ def run_trip_graph(user_input: dict) -> dict[str, Any]:
         "enriched_itinerary": None,
         "review_passed": False,
         "review_feedback": [],
+        "messages": [],
+        "agent_traces": [],
         "retry_count": 0,
         "max_retries": 1,
     }
 
+    # 第一轮
     result = graph.invoke(initial)
 
-    # 手动处理重试循环
+    # 检查是否需要重试（Reviewer 未通过且有反馈）
     retry = 0
+    max_r = result.get("max_retries", 1)
     while (
         not result.get("review_passed", False)
-        and result.get("planner_errors")
-        and retry < result.get("max_retries", 1)
+        and result.get("review_feedback")
+        and retry < max_r
     ):
         retry += 1
         result["retry_count"] = retry
+        # 清空旧的 reviewer 状态，Planner 会从 messages 读反馈
         result["planner_errors"] = []
         result["review_feedback"] = []
+        result["enriched_itinerary"] = None
+        logger.info("[Graph] retry %d/%d — Planner 收到 Reviewer 反馈", retry, max_r)
         result = graph.invoke(result)
+
+    # 收集所有 agent_traces
+    all_traces: list[dict] = []
+    for msg in result.get("messages", []):
+        content = msg.get("content", {})
+        if content:
+            all_traces.append(content)
+    result["agent_traces"] = all_traces
 
     return result
 
 
-__all__ = ["run_trip_graph", "get_graph"]
+def format_conversation_log(state: dict) -> str:
+    """把 Agent 对话历史格式化为可读文本，用于展示。"""
+    lines = ["=== Multi-Agent 协作日志 ==="]
+    for msg in state.get("messages", []):
+        summary = msg.get("summary", "")
+        if summary:
+            lines.append(f"  {summary}")
+    return "\n".join(lines)
+
+
+__all__ = ["run_trip_graph", "get_graph", "format_conversation_log"]

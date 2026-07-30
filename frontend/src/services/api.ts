@@ -19,8 +19,8 @@ const api = axios.create({
 });
 
 export async function generateTrip(payload: TripRequestPayload): Promise<Itinerary> {
-  const response = await api.post<Itinerary>("/trip/generate", payload);
-  return response.data;
+  const response = await api.post<{ itinerary: Itinerary; conversation_log: any[] }>("/trip/generate-graph", payload);
+  return response.data.itinerary;
 }
 
 export async function editTrip(payload: TripEditPayload): Promise<Itinerary> {

@@ -1,15 +1,12 @@
-"""Router Agent — 真 LLM 决策。
-
-每个 Router Agent 独立调用 LLM，根据目的地判断覆盖等级。
-"""
+"""Router Agent — LLM 决策 + 向所有 Agent 广播目的地分析结果。"""
 
 from __future__ import annotations
 
 import json
 import logging
+import datetime
 
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
 
 from app.agents.graph.state import TripState
 from app.config import (
@@ -23,135 +20,122 @@ from app.rag.guide_catalog import known_destinations
 
 logger = logging.getLogger(__name__)
 
-ROUTER_SYSTEM_PROMPT = """你是一个旅行规划路由专家。你的职责是分析用户输入的目的地，判断最适合的规划路径。
+ROUTER_SYSTEM_PROMPT = """你是一个旅行规划路由专家。分析用户输入的目的地，判断最适合的规划路径。
 
-已知以下城市已有深度本地攻略（curated 路径）：
-{curated_cities}
+已知深度攻略城市：{curated_cities}
+这些城市可以基于本地攻略生成高质量行程。
 
-对于这些城市，系统可以基于本地攻略知识库生成高质量行程。
+对于攻略未覆盖但有效的城市（如昆明、杭州），走 dynamic 路径。
+对于省份名称或无法识别的区域（如"云南""火星"），返回 unsupported。
 
-对于攻略未覆盖但具体有效的城市（如昆明、杭州、南京），走 dynamic 路径，
-系统会从地图服务获取 POI 候选数据。
+注意理解常见别名：春城=昆明、蓉城=成都、羊城=广州、魔都=上海。
 
-对于省份名称（如"云南""浙江""青海"）或无法识别的区域，返回 unsupported。
-
-判断时要考虑：
-- 用户输入的是具体城市还是省份
-- 该城市是否在 curated 列表中
-- 城市别名或俗称（如"春城"=昆明、"蓉城"=成都）
-
-返回 JSON 格式（不要 markdown 包裹）：
+返回 JSON（不要 markdown 包裹）：
 {{"tier": "curated"|"dynamic"|"unsupported",
   "canonical_city": "规范化城市名称",
   "reason": "判断理由"}}
 """
 
 
-class RouterDecision(BaseModel):
-    """Router Agent 的结构化输出。"""
-    tier: str = Field(..., pattern="^(curated|dynamic|unsupported)$")
-    canonical_city: str = Field(..., description="规范化后的城市名称")
-    reason: str = Field(..., description="判断理由")
-
-
 def _build_llm():
     return ChatOpenAI(
-        model=LLM_MODEL,
-        temperature=0.1,
-        api_key=LLM_API_KEY,
-        base_url=LLM_BASE_URL or None,
-        timeout=LLM_TIMEOUT_SECONDS,
-        max_retries=LLM_MAX_RETRIES,
+        model=LLM_MODEL, temperature=0.1,
+        api_key=LLM_API_KEY, base_url=LLM_BASE_URL or None,
+        timeout=LLM_TIMEOUT_SECONDS, max_retries=LLM_MAX_RETRIES,
     )
 
 
 def router_agent(state: TripState) -> dict:
-    """Router Agent：LLM 独立判断目的地覆盖等级。"""
+    """Router Agent：LLM 决策后，向所有 Agent 广播分析结果。"""
     destination = state.get("destination", "")
+    trace = {
+        "agent": "router",
+        "action": "destination_analysis",
+        "input": {"destination": destination},
+        "timestamp": datetime.datetime.now().isoformat(),
+    }
+
     if not destination:
+        trace["output"] = {"tier": "unsupported", "reason": "目的地为空"}
         return {
             "coverage": "unsupported",
             "normalized_destination": "",
             "resolution_message": "目的地不能为空。",
+            "messages": [{"agent": "router", "type": "decision", "content": trace}],
+            "agent_traces": [trace],
         }
 
     curated = "、".join(sorted(known_destinations()))
-    prompt = ROUTER_SYSTEM_PROMPT.format(curated_cities=curated)
-
     llm = _build_llm()
-    if not llm:
-        # fallback: 无 LLM 时走简单规则
-        return _rule_fallback(destination)
 
     try:
         response = llm.invoke([
-            ("system", prompt),
-            ("human", f"用户输入的目的地: {destination}"),
+            ("system", ROUTER_SYSTEM_PROMPT.format(curated_cities=curated)),
+            ("human", f"目的地: {destination}"),
         ])
         raw = response.content.strip()
-        # 清理可能的 markdown 包裹
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         decision = json.loads(raw)
         tier = decision.get("tier", "unsupported")
         canonical = decision.get("canonical_city", destination)
+        reason = decision.get("reason", "")
 
-        logger.info(
-            "[RouterAgent·LLM] %s → tier=%s canonical=%s reason=%s",
-            destination, tier, canonical, decision.get("reason", ""),
-        )
+        logger.info("[Router] %s → %s (%s)", destination, tier, canonical)
+
+        trace["output"] = {"tier": tier, "canonical_city": canonical, "reason": reason}
+        message = {
+            "agent": "router",
+            "type": "decision",
+            "content": trace,
+            "summary": f"Router: 将「{destination}」判定为 {tier}（规范化: {canonical}）",
+        }
 
         if tier not in ("curated", "dynamic"):
             return {
                 "coverage": "unsupported",
                 "normalized_destination": canonical,
-                "resolution_message": decision.get("reason", f"无法规划「{destination}」"),
+                "resolution_message": reason or f"无法规划「{destination}」",
+                "messages": [message],
+                "agent_traces": [trace],
             }
 
         return {
             "coverage": tier,
             "normalized_destination": canonical,
             "resolution_message": None,
+            "messages": [message],
+            "agent_traces": [trace],
         }
 
     except Exception as exc:
-        logger.warning("[RouterAgent] LLM failed, fallback to rule: %s", exc)
-        return _rule_fallback(destination)
+        logger.warning("[Router] LLM failed: %s", exc)
+        return _rule_fallback(destination, trace)
 
 
-def _rule_fallback(destination: str) -> dict:
-    """LLM 不可用时的规则级 fallback。"""
+def _rule_fallback(destination: str, trace: dict) -> dict:
     from app.services.city_resolver_service import resolve_city
     try:
         result = resolve_city(destination)
-        tier = result.tier.value if hasattr(result.tier, "value") else str(result.tier)
-        if tier == "curated":
-            return {
-                "coverage": "curated",
-                "normalized_destination": result.city,
-                "resolution_message": None,
-            }
-        elif tier == "dynamic":
-            return {
-                "coverage": "dynamic",
-                "normalized_destination": result.city,
-                "adcode": result.adcode,
-                "resolution_message": None,
-            }
-        else:
-            return {
-                "coverage": "unsupported",
-                "normalized_destination": destination,
-                "resolution_message": f"无法规划「{destination}」",
-            }
-    except Exception:
+        tier = "curated" if result.tier.value == "curated" else "dynamic"
+        trace["output"] = {"tier": tier, "canonical_city": result.city, "reason": "规则 fallback"}
         return {
-            "coverage": "unsupported",
-            "normalized_destination": destination,
-            "resolution_message": f"无法解析目的地「{destination}」",
+            "coverage": tier,
+            "normalized_destination": result.city,
+            "adcode": result.adcode,
+            "messages": [{"agent": "router", "type": "decision", "content": trace,
+                          "summary": f"Router(fallback): {destination} → {tier}"}],
+            "agent_traces": [trace],
+        }
+    except Exception:
+        trace["output"] = {"tier": "unsupported", "reason": "解析失败"}
+        return {
+            "coverage": "unsupported", "normalized_destination": destination,
+            "resolution_message": f"无法解析「{destination}」",
+            "messages": [{"agent": "router", "type": "decision", "content": trace}],
+            "agent_traces": [trace],
         }
 
 
 def router_should_continue(state: TripState) -> str:
-    coverage = state.get("coverage", "unsupported")
-    return "end" if coverage == "unsupported" else "planner"
+    return "end" if state.get("coverage") == "unsupported" else "planner"

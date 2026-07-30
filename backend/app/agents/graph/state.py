@@ -1,17 +1,22 @@
-"""Multi-Agent 共享状态定义。"""
+"""Multi-Agent 共享状态定义 — 含 Agent 间通信日志。"""
 
 from __future__ import annotations
 
 from typing import Annotated, Any, Optional
 
-from langgraph.graph import add_messages
 from typing_extensions import TypedDict
+
+
+def merge_messages(left: list, right: list) -> list:
+    """LangGraph 的 reducer：合并新旧消息列表。"""
+    return left + right
 
 
 class TripState(TypedDict):
     """贯穿所有 Agent 的共享状态。
 
-    LangGraph 的 State 是每次 node 返回后自动 merge 的字典。
+    messages 字段记录 Agent 之间的对话历史，
+    每个 Agent 都能读到所有消息，实现真正的双向通信。
     """
 
     # ---- 输入（不变） ----
@@ -27,20 +32,26 @@ class TripState(TypedDict):
     special_notes: str | None
 
     # ---- Router Agent 输出 ----
-    coverage: str                      # "curated" | "dynamic" | "unsupported"
-    normalized_destination: str        # 规范化后的目的地名称
-    adcode: str | None                 # 高德行政区代码（dynamic 用）
-    resolution_message: str | None     # 错误或提示信息
+    coverage: str
+    normalized_destination: str
+    adcode: str | None
+    resolution_message: str | None
 
-    # ---- Planner Agent 输入/输出 ----
-    rag_context: list[str]             # RAG 检索结果文本
-    planner_raw: dict | None           # LLM 原始输出
-    planner_errors: list[str]          # 规划阶段错误
+    # ---- Planner Agent 输出 ----
+    rag_context: list[str]
+    planner_raw: dict | None
+    planner_errors: list[str]
 
-    # ---- Reviewer Agent ----
-    enriched_itinerary: dict | None    # 最终行程
+    # ---- Reviewer Agent 输出 ----
+    enriched_itinerary: dict | None
     review_passed: bool
-    review_feedback: list[str]         # Reviewer 的改进建议
+    review_feedback: list[str]
+
+    # ---- Agent 间通信日志（新增） ----
+    messages: Annotated[list[dict], merge_messages]
+
+    # ---- 暴露给前端的完整调用链路 ----
+    agent_traces: list[dict]
 
     # ---- 循环控制 ----
     retry_count: int
