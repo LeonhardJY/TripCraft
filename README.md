@@ -1,14 +1,59 @@
-# TripCraft
+<div align="center">
 
-融合本地大模型（Ollama）、向量数据库（Qdrant）、RAG 攻略与高德地图的智能旅行规划系统。
+# 🧳 TripCraft
 
-输入目的地、日期、预算和偏好，系统自动生成结构化旅行方案，并补充地图点位、天气信息、预算拆分与可导出的旅行文档。
+**本地大模型驱动的智能旅行规划系统**
+
+融合 **Ollama** 本地推理 · **Qdrant** 向量检索 · **RAG** 攻略增强 · **高德地图** 可视化，
+输入目的地、日期、预算与偏好，一键生成结构化旅行方案。
 
 **作者：**[LeonhardJY](https://github.com/LeonhardJY)
 
+[![GitHub 作者](https://img.shields.io/badge/作者-LeonhardJY-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/LeonhardJY)
+[![项目仓库](https://img.shields.io/badge/仓库-TripCraft-2DA44E?style=for-the-badge&logo=github&logoColor=white)](https://github.com/LeonhardJY/TripCraft)
+[![更新日志](https://img.shields.io/badge/更新-CHANGELOG-D97757?style=for-the-badge&logo=git&logoColor=white)](https://github.com/LeonhardJY/TripCraft/blob/main/CHANGELOG.md)
+
+[快速启动](#-快速启动) · [技术栈](#-技术栈) · [架构](#-架构) · [界面预览](#-界面预览) · [API 接口](#-api-接口) · [配置](#-配置)
+
+</div>
+
 ---
 
-## 快速启动
+<div align="center">
+
+### ✨ 技术栈
+
+[![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Vue 3](https://img.shields.io/badge/Vue%203-4FC08D?style=for-the-badge&logo=vuedotjs&logoColor=white)](https://vuejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Ollama](https://img.shields.io/badge/Ollama-000000?style=for-the-badge&logo=ollama&logoColor=white)](https://ollama.com)
+[![Qdrant](https://img.shields.io/badge/Qdrant-9C1E1E?style=for-the-badge&logo=qdrant&logoColor=white)](https://qdrant.tech)
+[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://www.sqlite.org)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com)
+[![高德地图](https://img.shields.io/badge/高德地图-1E9FFF?style=for-the-badge&logoColor=white)](https://lbs.amap.com)
+
+</div>
+
+---
+
+<div align="center">
+
+### 📸 界面预览
+
+| 🗺️ 规划界面 | ✍️ 行程生成 |
+|:---:|:---:|
+| ![规划界面](./assets/showcase/01规划界面.jpeg) | ![行程生成界面](./assets/showcase/02行程生成界面.jpeg) |
+
+| 💾 保存界面 | 📄 PDF 导出 |
+|:---:|:---:|
+| ![保存界面](./assets/showcase/03保存界面.jpeg) | ![保存为 PDF](./assets/showcase/04保存为pdf.png) |
+
+</div>
+
+---
+
+## 🚀 快速启动
 
 项目依赖 **Docker Desktop**（Qdrant）+ **Ollama**（本地大模型）。
 
@@ -48,7 +93,7 @@ npm install
 npm run dev
 ```
 
-### 访问
+### 🔗 访问地址
 
 | 服务 | 地址 |
 |------|------|
@@ -58,7 +103,7 @@ npm run dev
 
 ---
 
-## 技术栈
+## 🧰 技术栈
 
 | 层 | 技术 |
 |---|------|
@@ -72,7 +117,7 @@ npm run dev
 
 ---
 
-## 架构
+## 🏗️ 架构
 
 ### 分层
 
@@ -108,7 +153,7 @@ Redis  → :6379 (可选缓存)
 
 ---
 
-## 项目结构
+## 📁 项目结构
 
 ```
 TripCraft/
@@ -138,7 +183,7 @@ TripCraft/
 
 ---
 
-## API 接口
+## 🔌 API 接口
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -155,7 +200,7 @@ TripCraft/
 
 ---
 
-## 配置
+## ⚙️ 配置
 
 ### 后端 `backend/.env`
 
@@ -184,7 +229,7 @@ VITE_AMAP_JS_KEY=your_javascript_api_key
 
 ---
 
-## 设计主题
+## 🎨 设计主题
 
 - **背景色**：#F4F1EA 暖奶油白
 - **强调色**：#D97757 珊瑚橙
@@ -194,7 +239,7 @@ VITE_AMAP_JS_KEY=your_javascript_api_key
 
 ---
 
-## 数据边界
+## 📦 数据边界
 
 - 6 个本地 Markdown 攻略用于 RAG 参考
 - 动态城市实体来自高德 POI 候选
